@@ -2,6 +2,7 @@ library(readr)
 library(dplyr)
 library(quantreg)
 library(writexl)
+library(tibble)
 
 # Read data
 dat <- read_csv("data/matchedsample(1202).csv", show_col_types = FALSE) %>%
@@ -32,18 +33,21 @@ desc <- dat %>%
     Q3 = quantile(Mentalsum, 0.75)
   )
 
-# Quantile regression (median)
+# Quantile regression
 fit <- rq(
   Mentalsum ~ Group + Sex + Age + Industry + Edu + Married,
   tau = 0.5,
   data = dat
 )
 
-# Extract results
+# ⭐ 修正重點（不要用 rename V1）
 res <- summary(fit, se = "nid")$coefficients %>%
-  as.data.frame() %>%
-  tibble::rownames_to_column("term") %>%
-  rename(Estimate = V1, SE = V2, t = V3, p = V4) %>%
+  as.data.frame()
+
+colnames(res) <- c("Estimate", "SE", "t", "p")
+
+res <- res %>%
+  rownames_to_column("term") %>%
   mutate(
     CI_low = Estimate - 1.96 * SE,
     CI_high = Estimate + 1.96 * SE
@@ -53,6 +57,7 @@ res <- summary(fit, se = "nid")$coefficients %>%
 fmt <- function(x) sprintf("%.2f", x)
 fmt_p <- function(p) ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
 
+# Report table
 table_report <- res %>%
   filter(term != "(Intercept)") %>%
   mutate(

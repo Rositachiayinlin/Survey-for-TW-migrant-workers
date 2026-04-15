@@ -2,6 +2,7 @@ library(readr)
 library(dplyr)
 library(quantreg)
 library(writexl)
+library(tibble)
 
 # Read data
 dat <- read_csv("data/matchedsample(1202).csv", show_col_types = FALSE) %>%
@@ -22,24 +23,28 @@ dat <- read_csv("data/matchedsample(1202).csv", show_col_types = FALSE) %>%
   ) %>%
   na.omit()
 
-# Quantile regression (median)
+# Quantile regression
 fit <- rq(
   Tiredsum ~ Group + Sex + Age + Industry + Edu + Married,
   tau = 0.5,
   data = dat
 )
 
-# Extract results
+# Extract results (⭐修正重點在這裡)
 res <- summary(fit, se = "nid")$coefficients %>%
-  as.data.frame() %>%
-  tibble::rownames_to_column("term") %>%
-  rename(Estimate = V1, SE = V2, t = V3, p = V4) %>%
+  as.data.frame()
+
+# ⭐ 不用 rename(V1)，直接改欄名
+colnames(res) <- c("Estimate", "SE", "t", "p")
+
+res <- res %>%
+  rownames_to_column("term") %>%
   mutate(
     CI_low = Estimate - 1.96 * SE,
     CI_high = Estimate + 1.96 * SE
   )
 
-# Helper
+# Format functions
 fmt <- function(x) sprintf("%.2f", x)
 fmt_p <- function(p) ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
 
@@ -63,7 +68,7 @@ table_report <- res %>%
   ) %>%
   select(Predictor, Coefficient, `95% CI`, `p value`)
 
-# Save outputs
+# Save
 write_csv(table_report, "QR_Tiredsum_table.csv")
 write_xlsx(table_report, "QR_Tiredsum_table.xlsx")
 

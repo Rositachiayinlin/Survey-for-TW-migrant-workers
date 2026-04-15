@@ -2,8 +2,6 @@ library(readr)
 library(dplyr)
 library(broom)
 library(writexl)
-library(flextable)
-library(officer)
 
 # Read data
 dat <- read_csv("data/non-matched(3671).csv", show_col_types = FALSE) %>%
@@ -11,99 +9,173 @@ dat <- read_csv("data/non-matched(3671).csv", show_col_types = FALSE) %>%
     Tiredness  = as.numeric(Tiredness),
     Mentalrisk = as.numeric(Mentalrisk),
     Poorhealth = as.numeric(Poorhealth),
-    Group = factor(Group, c(0,1),
-                   c("Non-migrant workers in Taiwan",
-                     "Taiwanese migrant workers in Vietnam")),
-    Sex = factor(Sex, c(1,2), c("Male","Female")),
+    Group = factor(
+      Group,
+      levels = c(0, 1),
+      labels = c("Non-migrant workers in Taiwan",
+                 "Taiwanese migrant workers in Vietnam")
+    ),
+    Sex = factor(Sex, c(1, 2), c("Male", "Female")),
     Age = as.numeric(Age),
-    Industry = factor(Industry, c(1,2,3),
-                      c("Manufacturing","Service sector","Construction")),
-    Married = factor(Married, c(0,1), c("Single","Married")),
-    Edu = factor(Edu, c(1,2,3),
-                 c("High school and below",
-                   "University or college",
-                   "Postgraduate"))
+    Industry = factor(
+      Industry, c(1, 2, 3),
+      c("Manufacturing", "Service sector", "Construction")
+    ),
+    Edu = factor(
+      Edu, c(1, 2, 3),
+      c("High school and below",
+        "University or college",
+        "Postgraduate")
+    ),
+    Married = factor(Married, c(0, 1), c("Single", "Married"))
   ) %>%
   na.omit()
 
 # Helpers
-fmt_p  <- function(p) ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
-fmt_ci <- function(or, lo, hi) sprintf("%.2f (%.2f–%.2f)", or, lo, hi)
+fmt_p <- function(p) {
+  ifelse(is.na(p), "", ifelse(p < 0.001, "<0.001", sprintf("%.3f", p)))
+}
+
+fmt_ci <- function(or, lo, hi) {
+  sprintf("%.2f (%.2f to %.2f)", or, lo, hi)
+}
 
 # Model function
-run_model <- function(outcome, label){
+run_model <- function(outcome, outcome_label) {
   glm(
-    as.formula(paste(outcome, "~ Group + Sex + Age + Industry + Married + Edu")),
-    data = dat, family = binomial()
+    as.formula(paste(outcome, "~ Group + Sex + Age + Industry + Edu + Married")),
+    data = dat,
+    family = binomial()
   ) %>%
     tidy(conf.int = TRUE, exponentiate = TRUE) %>%
     filter(term != "(Intercept)") %>%
     mutate(
-      Outcome = label,
+      Outcome = outcome_label,
       Variable = case_when(
         term == "GroupTaiwanese migrant workers in Vietnam" ~ "Group",
         term == "SexFemale" ~ "Sex",
         term == "Age" ~ "Age",
-        term %in% c("IndustryService sector","IndustryConstruction") ~ "Industry",
+        term %in% c("IndustryService sector", "IndustryConstruction") ~ "Industry",
+        term %in% c("EduUniversity or college", "EduPostgraduate") ~ "Educational attainment",
         term == "MarriedMarried" ~ "Marital status",
-        term %in% c("EduUniversity or college","EduPostgraduate") ~ "Educational attainment"
+        TRUE ~ term
       ),
       Comparison = case_when(
-        term == "GroupTaiwanese migrant workers in Vietnam" ~ "Migrant vs non-migrant",
-        term == "SexFemale" ~ "Female vs Male",
-        term == "Age" ~ "Per 1-year increase",
-        term == "IndustryService sector" ~ "Service vs Manufacturing",
-        term == "IndustryConstruction" ~ "Construction vs Manufacturing",
-        term == "MarriedMarried" ~ "Married vs Single",
-        term == "EduUniversity or college" ~ "University vs High school",
-        term == "EduPostgraduate" ~ "Postgraduate vs High school"
+        term == "GroupTaiwanese migrant workers in Vietnam" ~
+          "Taiwanese migrant workers in Vietnam (ref: non-migrant workers in Taiwan)",
+        term == "SexFemale" ~
+          "Female (ref: Male)",
+        term == "Age" ~
+          "Per 1-year increase",
+        term == "IndustryService sector" ~
+          "Service sector (ref: Manufacturing)",
+        term == "IndustryConstruction" ~
+          "Construction (ref: Manufacturing)",
+        term == "EduUniversity or college" ~
+          "University or college (ref: High school and below)",
+        term == "EduPostgraduate" ~
+          "Postgraduate (ref: High school and below)",
+        term == "MarriedMarried" ~
+          "Married (ref: Single)",
+        TRUE ~ term
       ),
-      aOR = estimate,
-      lower = conf.low,
-      upper = conf.high,
-      `aOR (95% CI)` = fmt_ci(estimate, conf.low, conf.high),
+      OR_num = estimate,
+      `Adjusted OR` = sprintf("%.2f", estimate),
+      `95% CI` = fmt_ci(estimate, conf.low, conf.high),
       `p value` = fmt_p(p.value)
-    )
+    ) %>%
+    select(Outcome, Variable, Comparison, OR_num, `Adjusted OR`, `95% CI`, `p value`)
 }
 
-# Run models
-res <- bind_rows(
+# Run all models
+table_full <- bind_rows(
   run_model("Tiredness", "Severe fatigue"),
   run_model("Mentalrisk", "Psychological distress"),
   run_model("Poorhealth", "Poor self-rated health")
 )
 
-# Tables
-table_full <- res %>%
-  select(Outcome, Variable, Comparison, `aOR (95% CI)`, `p value`)
-
-table_main <- res %>%
-  filter(Variable == "Group") %>%
-  select(Outcome, `aOR (95% CI)`, `p value`)
-
-table_numeric <- res %>%
-  select(Outcome, Variable, Comparison, aOR, lower, upper, p.value)
-
-# Save files
-write_csv(table_main, "table_main.csv")
-write_csv(table_full, "table_full.csv")
-write_csv(table_numeric, "table_numeric.csv")
-
-write_xlsx(
-  list(Main = table_main,
-       Full = table_full,
-       Numeric = table_numeric),
-  "regression_tables.xlsx"
+# Reorder full table
+outcome_order <- c(
+  "Severe fatigue",
+  "Psychological distress",
+  "Poor self-rated health"
 )
 
-# Word output
-doc <- read_docx() %>%
-  body_add_par("Regression results", style = "heading 1") %>%
-  body_add_flextable(flextable(table_main) %>% autofit()) %>%
-  body_add_par("", style = "Normal") %>%
-  body_add_flextable(flextable(table_full) %>% autofit())
+variable_order <- c(
+  "Group",
+  "Sex",
+  "Age",
+  "Industry",
+  "Educational attainment",
+  "Marital status"
+)
 
-print(doc, target = "regression_tables.docx")
+comparison_order <- c(
+  "Taiwanese migrant workers in Vietnam (ref: non-migrant workers in Taiwan)",
+  "Female (ref: Male)",
+  "Per 1-year increase",
+  "Service sector (ref: Manufacturing)",
+  "Construction (ref: Manufacturing)",
+  "University or college (ref: High school and below)",
+  "Postgraduate (ref: High school and below)",
+  "Married (ref: Single)"
+)
+
+table_full <- table_full %>%
+  mutate(
+    Outcome = factor(Outcome, levels = outcome_order),
+    Variable = factor(Variable, levels = variable_order),
+    Comparison = factor(Comparison, levels = comparison_order)
+  ) %>%
+  arrange(Outcome, Variable, Comparison) %>%
+  mutate(
+    Outcome = as.character(Outcome),
+    Variable = as.character(Variable),
+    Comparison = as.character(Comparison)
+  ) %>%
+  select(Outcome, Variable, Comparison, `Adjusted OR`, `95% CI`, `p value`)
+
+# Main results: Group effect only
+table_main <- table_full %>%
+  filter(Variable == "Group") %>%
+  mutate(`Adjusted covariates` = "Sex, age, industry, educational attainment, marital status") %>%
+  select(
+    Outcome,
+    Exposure = Comparison,
+    `Adjusted OR`,
+    `95% CI`,
+    `p value`,
+    `Adjusted covariates`
+  )
+
+# Optional numeric table
+table_numeric <- bind_rows(
+  run_model("Tiredness", "Severe fatigue"),
+  run_model("Mentalrisk", "Psychological distress"),
+  run_model("Poorhealth", "Poor self-rated health")
+) %>%
+  mutate(
+    Outcome = factor(Outcome, levels = outcome_order),
+    Variable = factor(Variable, levels = variable_order),
+    Comparison = factor(Comparison, levels = comparison_order)
+  ) %>%
+  arrange(Outcome, Variable, Comparison) %>%
+  mutate(
+    Outcome = as.character(Outcome),
+    Variable = as.character(Variable),
+    Comparison = as.character(Comparison)
+  ) %>%
+  select(Outcome, Variable, Comparison, OR_num, `Adjusted OR`, `95% CI`, `p value`)
+
+# Save Excel only
+write_xlsx(
+  list(
+    "Main results" = table_main,
+    "Full regression table" = table_full,
+    "Numeric table" = table_numeric
+  ),
+  "nonmatched_regression_tables.xlsx"
+)
 
 # Print
 table_main
